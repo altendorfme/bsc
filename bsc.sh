@@ -32,17 +32,17 @@ CLOUD_AGENTS=(
 )
 
 ASSUME_YES=0
-DO_UPGRADE="" DO_HARDEN="" DO_PORT="" DO_UFW="" DO_F2B="" DO_AUTOUPD="" DO_KERNEL=""
+DO_UPGRADE="" DO_HARDEN="" DO_PORT="" DO_F2B="" DO_AUTOUPD="" DO_KERNEL=""
 DO_RMUSER="" DO_AGENTS="" DO_DOCKER="" DO_DOCKER_GROUP="" DO_TS="" DO_TS_SSH=""
 DO_DOCKHAND="" DO_HAWSER=""
 OPT_USER="" OPT_PASSWORD_FILE="" OPT_RANDOM_PW=0 OPT_KEY="" OPT_SUDO=""
-OPT_SWAP="" OPT_TZ="" OPT_SSH_PORT="" OPT_UFW_PORTS="" OPT_AUTO_REBOOT=""
-OPT_AGENTS="" OPT_TS_KEYFILE="" OPT_DOCKHAND_BIND="" OPT_DOCKHAND_PORT=""
+OPT_SWAP="" OPT_TZ="" OPT_SSH_PORT="" OPT_AUTO_REBOOT=""
+OPT_AGENTS="" OPT_TS_KEYFILE="" OPT_DOCKHAND_BIND="" OPT_DOCKHAND_PORT="" OPT_DOCKHAND_NET=""
 OPT_HAWSER_URL="" OPT_HAWSER_TOKENFILE="" OPT_HAWSER_CA=""
 
 DISTRO="" CODENAME="" SESSION_USER="" CLIENT_IP="" PUBLIC_IP=""
 TARGET_USER="" OLD_PORTS=() SSH_PORTS=() PORT_CHANGED=0 NEW_PORT=""
-CHECK_OK=0 SSH_TOUCHED=0 UFW_ON=0 TS_UP=0 TS_IP="" HARDENED=0
+CHECK_OK=0 SSH_TOUCHED=0 TS_UP=0 TS_IP="" HARDENED=0
 SUMMARY=()
 
 if [[ -t 2 ]]; then C_B=$'\e[1m' C_G=$'\e[32m' C_Y=$'\e[33m' C_R=$'\e[31m' C_C=$'\e[36m' C_0=$'\e[0m'
@@ -152,7 +152,6 @@ System
 Security
   --[no-]ssh-harden           default: yes
   --ssh-port N                change the SSH port
-  --[no-]ufw  --ufw-ports 80,443,8080/tcp
   --[no-]fail2ban
   --[no-]auto-updates  --auto-reboot HH:MM
   --[no-]kernel-hardening     default: yes
@@ -163,7 +162,7 @@ Security
 Apps
   --[no-]docker  --docker-group
   --[no-]tailscale  --tailscale-authkey-file FILE  --tailscale-ssh
-  --[no-]dockhand  --dockhand-bind 127.0.0.1|tailscale|0.0.0.0  --dockhand-port N
+  --[no-]dockhand  --dockhand-bind 127.0.0.1|tailscale|0.0.0.0  --dockhand-port N  --dockhand-network NAME
   --[no-]hawser  --hawser-url wss://...  --hawser-token-file FILE  --hawser-ca FILE
 
 General
@@ -188,7 +187,6 @@ parse_args() {
       --timezone) OPT_TZ=${2:?}; shift ;;
       --swap) OPT_SWAP=${2:?}; shift ;;
       --ssh-port) OPT_SSH_PORT=${2:?}; DO_PORT=1; shift ;;
-      --ufw-ports) OPT_UFW_PORTS=${2:?}; DO_UFW=1; shift ;;
       --auto-reboot) OPT_AUTO_REBOOT=${2:?}; DO_AUTOUPD=1; shift ;;
       --remove-cloud-agents) OPT_AGENTS=${2:?}; DO_AGENTS=1; shift ;;
       --docker-group) DO_DOCKER_GROUP=1 ;;
@@ -196,12 +194,12 @@ parse_args() {
       --tailscale-ssh) DO_TS_SSH=1 ;;
       --dockhand-bind) OPT_DOCKHAND_BIND=${2:?}; DO_DOCKHAND=1; shift ;;
       --dockhand-port) OPT_DOCKHAND_PORT=${2:?}; DO_DOCKHAND=1; shift ;;
+      --dockhand-network) OPT_DOCKHAND_NET=${2:?}; DO_DOCKHAND=1; shift ;;
       --hawser-url) OPT_HAWSER_URL=${2:?}; DO_HAWSER=1; shift ;;
       --hawser-token-file) OPT_HAWSER_TOKENFILE=${2:?}; DO_HAWSER=1; shift ;;
       --hawser-ca) OPT_HAWSER_CA=${2:?}; shift ;;
       --upgrade|--no-upgrade) DO_UPGRADE=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
       --ssh-harden|--no-ssh-harden) DO_HARDEN=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
-      --ufw|--no-ufw) DO_UFW=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
       --fail2ban|--no-fail2ban) DO_F2B=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
       --auto-updates|--no-auto-updates) DO_AUTOUPD=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
       --kernel-hardening|--no-kernel-hardening) DO_KERNEL=$([[ $flag == --no-* ]] && echo 0 || echo 1) ;;
@@ -664,7 +662,7 @@ port_listening() { ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
 
 iptables_persistent_allow() {
   local p=$1
-  has_netfilter_persistent && [[ $UFW_ON == 0 ]] || return 0
+  has_netfilter_persistent || return 0
   command -v iptables >/dev/null || return 0
   if ! iptables -C INPUT -p tcp --dport "$p" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; then
     iptables -I INPUT 1 -p tcp --dport "$p" -m conntrack --ctstate NEW -j ACCEPT
@@ -678,7 +676,7 @@ iptables_persistent_allow() {
 }
 iptables_persistent_remove() {
   local p=$1
-  has_netfilter_persistent && [[ $UFW_ON == 0 ]] || return 0
+  has_netfilter_persistent || return 0
   while iptables -D INPUT -p tcp --dport "$p" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; do :; done
   while ip6tables -D INPUT -p tcp --dport "$p" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; do :; done
   netfilter-persistent save >/dev/null 2>&1 || true
@@ -713,79 +711,7 @@ step_ssh_port() {
   fi
 }
 
-step_ufw() {
-  step "UFW firewall"
-  info "Many clouds already have their own firewall (Security Group/List). UFW is an extra layer."
-  decide DO_UFW "Enable UFW?" n
-  [[ $DO_UFW == 1 ]] || { skip_ "UFW"; return 0; }
-
-  local extra="" p ssh_from=""
-  UFW_RULES=()
-  if [[ -n $OPT_UFW_PORTS ]]; then extra=$OPT_UFW_PORTS
-  else
-    if yn "Allow HTTP/HTTPS (80, 443/tcp and 443/udp)?" n; then
-      UFW_RULES+=("80/tcp" "443/tcp" "443/udp")
-    fi
-    info "Format: port[/proto][@source]. E.g. 8080, 51820/udp, 3000:3005/tcp, 9100/tcp@10.0.0.0/8"
-    ask extra "Other ports (empty = none)" ""
-    if yn "Restrict SSH to specific source IPs/networks? (careful with dynamic IPs)" n; then
-      ask ssh_from "IPs/CIDRs allowed for SSH (space-separated)" "${CLIENT_IP:-}"
-    fi
-  fi
-  IFS=',' read -ra more <<<"${extra// /}"
-  for p in "${more[@]}"; do
-    [[ -z $p ]] && continue
-    if [[ $p =~ ^[0-9]{1,5}(:[0-9]{1,5})?(/(tcp|udp))?(@[0-9a-fA-F.:/]+)?$ ]]; then
-      local base=${p%%@*} src=""; [[ $p == *@* ]] && src="@${p#*@}"
-      [[ $base == */* ]] || base="$base/tcp"
-      UFW_RULES+=("$base$src")
-    else warn "Ignoring invalid rule: $p"; fi
-  done
-
-  if has_netfilter_persistent; then
-    warn "This VM has persistent cloud iptables rules (e.g. OCI). UFW will replace them;"
-    warn "backup in /root/iptables-before-ufw.rules (the cloud OUTPUT rules are kept)."
-    iptables-save >/root/iptables-before-ufw.rules 2>/dev/null || true
-  fi
-  apt_install ufw
-  # Old cloud INPUT rules (REJECT at the end) would block the new ports.
-  if [[ -f /root/iptables-before-ufw.rules ]] && iptables -S INPUT 2>/dev/null | grep -q -- '-j REJECT'; then
-    iptables -P INPUT ACCEPT; iptables -F INPUT
-    ip6tables -P INPUT ACCEPT 2>/dev/null; ip6tables -F INPUT 2>/dev/null || true
-  fi
-
-  ufw --force reset >/dev/null
-  ufw default deny incoming >/dev/null
-  ufw default allow outgoing >/dev/null
-  local s
-  for p in "${SSH_PORTS[@]}"; do
-    if [[ -n $ssh_from ]]; then for s in $ssh_from; do ufw allow from "$s" to any port "$p" proto tcp comment 'SSH' >/dev/null; done
-    else ufw limit "$p/tcp" comment 'SSH' >/dev/null; fi
-  done
-  SSH_FROM=$ssh_from
-  local r port proto src
-  for r in "${UFW_RULES[@]}"; do
-    port=${r%%/*}; proto=${r#*/}; proto=${proto%%@*}; src=""; [[ $r == *@* ]] && src=${r#*@}
-    if [[ -n $src ]]; then
-      ufw allow from "$src" to any port "$port" proto "$proto" >/dev/null
-    else
-      ufw allow "$port/$proto" >/dev/null
-    fi
-  done
-  ufw --force enable >/dev/null
-  UFW_ON=1
-  ufw status verbose | sed 's/^/      /'
-  done_ "UFW active (SSH ${SSH_PORTS[*]}${ssh_from:+ from $ssh_from}${UFW_RULES:+ + ${UFW_RULES[*]}})"
-}
-UFW_RULES=() SSH_FROM="" SSH_TCP_FWD=local
-
-ufw_ssh_remove() { # port
-  [[ $UFW_ON == 1 ]] || return 0
-  local s
-  ufw delete limit "$1/tcp" >/dev/null 2>&1 || true
-  for s in $SSH_FROM; do ufw delete allow from "$s" to any port "$1" proto tcp >/dev/null 2>&1 || true; done
-  return 0
-}
+SSH_TCP_FWD=local
 
 step_checkpoint() {
   step "Access test (anti-lockout)"
@@ -811,7 +737,6 @@ step_checkpoint() {
     warn "Access not confirmed. Hardening, port change and removals will be skipped."
     if [[ $PORT_CHANGED == 1 ]]; then
       warn "Reverting the new port $NEW_PORT."; fail_ "SSH port change reverted (no access test)"
-      ufw_ssh_remove "$NEW_PORT"
       iptables_persistent_remove "$NEW_PORT"
       PORT_CHANGED=0; SSH_PORTS=("${OLD_PORTS[@]}"); NEW_PORT=""
       rm -f "$SOCKET_OVERRIDE"
@@ -855,7 +780,6 @@ step_ssh_finalize() {
     SSH_PORTS=("$NEW_PORT")
     local p
     for p in "${OLD_PORTS[@]}"; do
-      ufw_ssh_remove "$p"
       [[ $p == 22 ]] || iptables_persistent_remove "$p"
     done
   fi
@@ -880,8 +804,7 @@ step_fail2ban() {
   ask extra "Other IPs/networks to ignore (space-separated; empty = none)" ""
   [[ -n $extra ]] && ignore+=" $extra"
   apt_install fail2ban python3-systemd
-  if [[ $UFW_ON == 1 ]]; then action=ufw
-  elif command -v nft >/dev/null && ! command -v iptables >/dev/null; then action=nftables-multiport
+  if command -v nft >/dev/null && ! command -v iptables >/dev/null; then action=nftables-multiport
   else action=iptables-multiport; fi
   local ports; ports=$(IFS=,; echo "${SSH_PORTS[*]}")
   cat >/etc/fail2ban/jail.d/sshd.local <<EOF
@@ -983,14 +906,6 @@ EOF
     decide DO_DOCKER_GROUP "Add $TARGET_USER to the docker group?" y
     [[ $DO_DOCKER_GROUP == 1 ]] && usermod -aG docker "$TARGET_USER"
   fi
-  if [[ $UFW_ON == 1 ]]; then
-    warn "By default, ports published by Docker (-p) BYPASS UFW."
-    if yn "Apply the ufw-docker fix (UFW will also filter container ports)?" y; then
-      ufw_docker_fix
-    else
-      warn "Publish containers on 127.0.0.1:PORT or use the cloud firewall."
-    fi
-  fi
   done_ "Docker $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ,)"
 }
 
@@ -1035,25 +950,7 @@ step_tailscale() {
     fail_ "Tailscale up"
   fi
   shred -u "$kf" 2>/dev/null || rm -f "$kf"
-
-  if [[ $TS_UP == 1 && $UFW_ON == 1 ]]; then
-    ufw allow in on tailscale0 comment 'Tailscale' >/dev/null
-    info "UFW: traffic on the tailscale0 interface allowed."
-    if [[ $UFW_DOCKER == 1 ]] || grep -q '^# BEGIN UFW AND DOCKER' /etc/ufw/after.rules 2>/dev/null; then
-      ufw route allow in on tailscale0 comment 'Tailscale -> Docker' >/dev/null
-      info "UFW: container ports reachable through Tailscale ($TS_IP:PORT)."
-    fi
-    if [[ $ASSUME_YES == 0 && $CHECK_OK == 1 ]] &&
-      yn "Close public SSH and allow it only through Tailscale ($TS_IP)?" n; then
-      local p
-      for p in "${SSH_PORTS[@]}"; do ufw_ssh_remove "$p"; done
-      TS_SSH_ONLY=1
-      warn "Public SSH closed in UFW. Test with: ssh -p ${SSH_PORTS[0]} $TARGET_USER@$TS_IP (the final test will ask for it)."
-      done_ "SSH only through Tailscale (UFW)"
-    fi
-  fi
 }
-TS_SSH_ONLY=0
 
 step_dockhand() {
   docker_ok || return 0
@@ -1067,7 +964,7 @@ step_dockhand() {
   if [[ -z $bind ]]; then
     local opts=("Localhost only (127.0.0.1), access through an SSH tunnel (recommended)")
     [[ $TS_UP == 1 ]] && opts+=("Tailscale: localhost + 'tailscale serve' on tailnet port $port")
-    opts+=("Public (0.0.0.0): bypasses UFW, use the cloud firewall")
+    opts+=("Public (0.0.0.0): restrict access in the cloud firewall")
     choose c "Where should Dockhand be exposed?" 1 "${opts[@]}"
     case "${opts[$((c - 1))]}" in
       Localhost*) bind=127.0.0.1 ;; Tailscale*) bind=tailscale ;; *) bind=0.0.0.0 ;;
@@ -1075,6 +972,21 @@ step_dockhand() {
   fi
   local host_ip=127.0.0.1
   [[ $bind == 0.0.0.0 ]] && host_ip=0.0.0.0
+
+  local net=$OPT_DOCKHAND_NET nets net_yaml=""
+  if [[ -z $net && $ASSUME_YES == 0 ]]; then
+    nets=$(docker network ls --filter driver=bridge --format '{{.Name}}' | grep -vx bridge | grep -v '_default$' | tr '\n' ' ')
+    info "To publish Dockhand through a reverse proxy container, join the proxy's Docker network."
+    [[ -n $nets ]] && info "Existing networks: $nets"
+    ask net "Docker network shared with the reverse proxy (empty = none)" ""
+  fi
+  if [[ -n $net ]]; then
+    if ! docker network inspect "$net" >/dev/null 2>&1; then
+      docker network create "$net" >/dev/null
+      info "Network $net created. Attach the proxy to it as an external network."
+    fi
+    net_yaml=$(printf '    networks:\n      - default\n      - %s\nnetworks:\n  %s:\n    external: true' "$net" "$net")
+  fi
 
   install -d -m 755 /opt/dockhand /opt/dockhand/data
   cat >/opt/dockhand/docker-compose.yml <<EOF
@@ -1091,6 +1003,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/dockhand/data:/app/data
+${net_yaml}
 EOF
   docker compose -f /opt/dockhand/docker-compose.yml up -d --quiet-pull
   sleep 3
@@ -1101,10 +1014,13 @@ EOF
         if tailscale serve --bg --tcp "$port" "tcp://127.0.0.1:${port}" >/dev/null 2>&1; then
           info "Access through the tailnet: http://${TS_IP}:${port}"
         else warn "tailscale serve failed; Dockhand is only on 127.0.0.1:${port}."; fi ;;
-      0.0.0.0) [[ $UFW_DOCKER == 1 ]] && ufw route allow proto tcp from any to any port 3000 comment 'Dockhand' >/dev/null
-               warn "Dockhand is public at http://${PUBLIC_IP:-<ip>}:${port}. Create the admin user NOW and restrict access in the cloud firewall." ;;
+      0.0.0.0) warn "Dockhand is public at http://${PUBLIC_IP:-<ip>}:${port}. Create the admin user NOW and restrict access in the cloud firewall." ;;
     esac
-    done_ "Dockhand ${tag} on ${bind}:${port} (data in /opt/dockhand/data)"
+    if [[ -n $net ]]; then
+      info "Reverse proxy target: http://dockhand:3000 (network $net)."
+      warn "Enable authentication in Dockhand (Settings > Authentication) before publishing it through the proxy."
+    fi
+    done_ "Dockhand ${tag} on ${bind}:${port}${net:+ + network $net} (data in /opt/dockhand/data)"
   else
     docker logs --tail 30 dockhand 2>&1 | sed 's/^/      /' || true
     fail_ "Dockhand is not running"
@@ -1192,47 +1108,6 @@ EOF
   fi
 }
 
-# ufw-docker (github.com/chaifeng/ufw-docker)
-UFW_DOCKER=0
-ufw_docker_fix() {
-  if ! grep -q '^# BEGIN UFW AND DOCKER' /etc/ufw/after.rules; then
-    cp -a /etc/ufw/after.rules /etc/ufw/after.rules.bak-bsc
-    cat >>/etc/ufw/after.rules <<'EOF'
-# BEGIN UFW AND DOCKER
-*filter
-:ufw-user-forward - [0:0]
-:ufw-docker-logging-deny - [0:0]
-:DOCKER-USER - [0:0]
--A DOCKER-USER -j ufw-user-forward
--A DOCKER-USER -j RETURN -s 10.0.0.0/8
--A DOCKER-USER -j RETURN -s 172.16.0.0/12
--A DOCKER-USER -j RETURN -s 192.168.0.0/16
--A DOCKER-USER -p udp -m udp --sport 53 --dport 1024:65535 -j RETURN
--A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 192.168.0.0/16
--A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 10.0.0.0/8
--A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 172.16.0.0/12
--A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 192.168.0.0/16
--A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 10.0.0.0/8
--A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 172.16.0.0/12
--A DOCKER-USER -j RETURN
--A ufw-docker-logging-deny -m limit --limit 3/min --limit-burst 10 -j LOG --log-prefix "[UFW DOCKER BLOCK] "
--A ufw-docker-logging-deny -j DROP
-COMMIT
-# END UFW AND DOCKER
-EOF
-  fi
-  local r port proto
-  for r in "${UFW_RULES[@]}"; do
-    [[ $r == *@* ]] && continue
-    port=${r%%/*}; proto=${r#*/}
-    ufw route allow proto "$proto" from any to any port "$port" >/dev/null 2>&1 || true
-  done
-  ufw reload >/dev/null
-  UFW_DOCKER=1
-  info "ufw-docker active. To expose a container: sudo ufw route allow proto tcp from any to any port CONTAINER_PORT"
-  done_ "UFW filtering Docker ports (ufw-docker)"
-}
-
 step_journald() {
   step "System logs (journald)"
   decide DO_JOURNALD "Make logs persistent with a disk cap?" y
@@ -1296,23 +1171,21 @@ EOF
 
 FINAL_OK=1
 rollback_access() {
-  warn "Reverting access changes (SSH/UFW)..."
+  warn "Reverting SSH changes..."
   rm -f "$SOCKET_OVERRIDE"
   restore_port_backups
   restore_orig_dropin
   PORT_CHANGED=0; SSH_PORTS=("${OLD_PORTS[@]}")
   restart_ssh || true
-  if [[ $UFW_ON == 1 ]]; then ufw --force disable >/dev/null || true; UFW_ON=0; fi
-  ok "SSH is back to its original config (ports ${OLD_PORTS[*]}); UFW disabled."
-  fail_ "SSH/UFW rollback applied"
+  ok "SSH is back to its original config (ports ${OLD_PORTS[*]})."
+  fail_ "SSH rollback applied"
 }
 
 step_final_check() {
-  [[ $SSH_TOUCHED == 1 || $UFW_ON == 1 ]] || return 0
+  [[ $SSH_TOUCHED == 1 ]] || return 0
   [[ $CHECK_OK == 1 ]] || return 0
   step "Final access test"
   local host=${PUBLIC_IP:-<ip>}
-  [[ $TS_SSH_ONLY == 1 ]] && host=$TS_IP
   if [[ $ASSUME_YES == 1 ]]; then
     ssh-keyscan -p "${SSH_PORTS[0]}" -T 5 127.0.0.1 >/dev/null 2>&1 || { FINAL_OK=0; rollback_access; }
     return 0
@@ -1320,7 +1193,7 @@ step_final_check() {
   printf '\n  In ANOTHER terminal, test again with the final config:\n\n      %sssh -p %s %s@%s%s\n\n' "$C_B" "${SSH_PORTS[0]}" "$TARGET_USER" "$host" "$C_0" >&2
   if yn "Did it work?" y; then done_ "Final access test OK"; return 0; fi
   FINAL_OK=0
-  if yn "Revert the SSH/UFW changes now?" y; then rollback_access; fi
+  if yn "Revert the SSH changes now?" y; then rollback_access; fi
 }
 
 remove_user_from_sudoers() {
@@ -1491,7 +1364,6 @@ summary() {
   for l in "${SUMMARY[@]}"; do printf '  %s\n' "$l"; done
   detect_public_ip
   printf '\n  Access: %sssh -p %s %s@%s%s\n' "$C_B" "${SSH_PORTS[0]}" "$TARGET_USER" "${PUBLIC_IP:-<ip>}" "$C_0"
-  [[ $TS_SSH_ONLY == 1 ]] && printf '  (public SSH closed; use the Tailscale IP: %s)\n' "$TS_IP"
   [[ $PORT_CHANGED == 1 ]] && printf '  Remember: port %s must be open in the provider firewall (and 22 can be closed there).\n' "$NEW_PORT"
   [[ -f /var/run/reboot-required ]] && printf '  %sReboot pending%s (kernel/libs updated): sudo reboot\n' "$C_Y" "$C_0"
   printf '  Backups: set up weekly snapshots at the provider and a daily copy of the data (e.g. /opt/*/data) off the VM. Test the restore.\n'
@@ -1516,7 +1388,6 @@ main() {
   step_swap
   step_user
   step_ssh_port
-  step_ufw
   step_checkpoint
   step_ssh_finalize
   step_fail2ban
