@@ -459,8 +459,8 @@ create_user() {
     if [[ $pwmode == typed ]]; then
       while true; do
         ask_secret pw "Password for $name" 1
-        ((${#pw} >= 10)) && break
-        warn "Use at least 10 characters."
+        [[ -n $pw ]] && break
+        warn "The password cannot be empty."
       done
     fi
   fi
