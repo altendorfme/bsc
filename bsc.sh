@@ -1039,6 +1039,10 @@ step_tailscale() {
   if [[ $TS_UP == 1 && $UFW_ON == 1 ]]; then
     ufw allow in on tailscale0 comment 'Tailscale' >/dev/null
     info "UFW: traffic on the tailscale0 interface allowed."
+    if [[ $UFW_DOCKER == 1 ]] || grep -q '^# BEGIN UFW AND DOCKER' /etc/ufw/after.rules 2>/dev/null; then
+      ufw route allow in on tailscale0 comment 'Tailscale -> Docker' >/dev/null
+      info "UFW: container ports reachable through Tailscale ($TS_IP:PORT)."
+    fi
     if [[ $ASSUME_YES == 0 && $CHECK_OK == 1 ]] &&
       yn "Close public SSH and allow it only through Tailscale ($TS_IP)?" n; then
       local p
