@@ -103,15 +103,15 @@ ask_secret() {
 }
 
 choose() {
-  local __v=$1 title=$2 def=$3; shift 3
-  local i=1 ans
-  if [[ $ASSUME_YES == 1 ]]; then printf -v "$__v" '%s' "$def"; return 0; fi
-  printf '  %s\n' "$title" >&2
-  for o in "$@"; do printf '    %d) %s\n' "$i" "$o" >&2; i=$((i + 1)); done
+  local __v=$1 __title=$2 __def=$3; shift 3
+  local __n=1 __ans __o
+  if [[ $ASSUME_YES == 1 ]]; then printf -v "$__v" '%s' "$__def"; return 0; fi
+  printf '  %s\n' "$__title" >&2
+  for __o in "$@"; do printf '    %d) %s\n' "$__n" "$__o" >&2; __n=$((__n + 1)); done
   while true; do
-    read -r -p "  Choice [${def}]: " ans <"$TTY" || ans=""
-    ans=${ans:-$def}
-    if [[ $ans =~ ^[0-9]+$ ]] && ((ans >= 1 && ans <= $#)); then printf -v "$__v" '%s' "$ans"; return 0; fi
+    read -r -p "  Choice [${__def}]: " __ans <"$TTY" || __ans=""
+    __ans=${__ans:-$__def}
+    if [[ $__ans =~ ^[0-9]+$ ]] && ((__ans >= 1 && __ans <= $#)); then printf -v "$__v" '%s' "$__ans"; return 0; fi
     warn "Invalid option."
   done
 }
